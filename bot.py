@@ -8,16 +8,25 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from dotenv import load_dotenv
 from pyCryptoPayAPI import pyCryptoPayAPI
 
+# --- ИМПОРТ ФУНКЦИЙ ИЗ SUPABASE ---
+from db_supabase import (
+    save_user,
+    get_all_users,
+    load_subscriptions_from_db,
+    save_subscription,
+    delete_subscription,
+    is_subscribed as db_is_subscribed
+)
+
 load_dotenv()
 
 # --- НАСТРОЙКИ ---
-# --- ТОКЕН ИЗ ПЕРЕМЕННОЙ ОКРУЖЕНИЯ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Отладка
 print(f"✅ Токен загружен: {'ДА' if BOT_TOKEN else 'НЕТ'}")
 if not BOT_TOKEN:
-    logging.error("❌ Токен не найден! Проверьте переменную BOT_TOKEN на Railway.")
+    logging.error("❌ Токен не найден! Проверьте переменную BOT_TOKEN.")
     exit(1)
+
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 CHANNEL_ID = int(os.getenv("PRIVATE_CHANNEL_ID", 0))
 PRICE_1 = int(os.getenv("PRICE_1_MONTH", 300))
@@ -32,47 +41,21 @@ crypto = pyCryptoPayAPI(CRYPTO_TOKEN)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-USERS_FILE = "users.txt"
-
-def save_user(user_id):
-    try:
-        with open(USERS_FILE, "r") as f:
-            users = [line.strip() for line in f]
-    except FileNotFoundError:
-        users = []
-    
-    if str(user_id) not in users:
-        with open(USERS_FILE, "a") as f:
-            f.write(f"{user_id}\n")
-
+# Глобальная переменная для подписок
 subscriptions = {}
 
 def load_subscriptions():
+    """Загружает подписки из Supabase в глобальную переменную"""
     global subscriptions
-    try:
-        with open("subscriptions.txt", "r") as f:
-            for line in f:
-                user_id, expires = line.strip().split("|")
-                subscriptions[int(user_id)] = datetime.fromisoformat(expires)
-    except FileNotFoundError:
-        subscriptions = {}
+    subscriptions = load_subscriptions_from_db()
 
-def save_subscriptions():
-    with open("subscriptions.txt", "w") as f:
-        for user_id, expires in subscriptions.items():
-            f.write(f"{user_id}|{expires.isoformat()}\n")
-
-def is_subscribed(user_id):
-    if user_id not in subscriptions:
-        return False
-    return subscriptions[user_id] > datetime.now()
 
 # --- /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    save_user(user_id)
+    save_user(user_id)  # Сохраняем в Supabase
     
-    if is_subscribed(user_id):
+    if db_is_subscribed(user_id, subscriptions):
         await update.message.reply_text(
             "✅ <b>У вас есть активная подписка!</b>\n\n"
             "📡 Gifts Intelligence — уже открыт\n"
@@ -102,6 +85,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
 
+
 # --- КНОПКА НАЗАД (С УДАЛЕНИЕМ ИНВОЙСА) ---
 async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -121,7 +105,7 @@ async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Не удалось удалить инвойс: {e}")
     
-    if is_subscribed(user_id):
+    if db_is_subscribed(user_id, subscriptions):
         await query.edit_message_text(
             "✅ <b>У вас есть активная подписка!</b>\n\n"
             "📡 Gifts Intelligence — уже открыт\n"
@@ -133,7 +117,7 @@ async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "💎 <b>Подписка на NFT-сигналы</b>\n\n"
         "Что вы получаете:\n"
-        "📡 <b>Сигнальный канал</b> — арбитражные сигналы по NFT-подаркам\n"
+        "📡 <b>Gifts Intelligence</b> — арбитражные сигналы по NFT-подаркам\n"
         "🔍 <b>NFT-Tracker</b> — поиск владельцев подарков\n\n"
         "⚠️ <b>Дисклеймер:</b> Не финансовый совет. Все решения — на ваш риск\n\n"
         "💰 <b>Стоимость:</b>\n"
@@ -150,6 +134,7 @@ async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=reply_markup)
+
 
 # --- ВЫБОР СПОСОБА ОПЛАТЫ ---
 async def choose_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,6 +170,7 @@ async def choose_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+
 # --- ПОКУПКА ЧЕРЕЗ STARS (С СОХРАНЕНИЕМ ID ИНВОЙСА) ---
 async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -209,7 +195,6 @@ async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # Отправляем инвойс и сохраняем его message_id
         sent_message = await context.bot.send_invoice(
             chat_id=user_id,
             title=f"Подписка на сигналы — {label}",
@@ -224,16 +209,17 @@ async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             need_email=False
         )
         
-        # Сохраняем ID сообщения с инвойсом для последующего удаления
         context.user_data['invoice_message_id'] = sent_message.message_id
         
     except Exception as e:
         logger.error(f"Ошибка создания счёта: {e}")
         await query.edit_message_text("❌ Ошибка создания счёта. Попробуйте позже.")
 
+
 async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
     await query.answer(ok=True)
+
 
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -243,15 +229,15 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     days = int(parts[1])
     
     expires = datetime.now() + timedelta(days=days)
-    subscriptions[user_id] = expires
-    save_subscriptions()
-    save_user(user_id)
     
-    try:
-        with open("subscriptions.txt", "a") as f:
-            f.write(f"{user_id}|{expires.isoformat()}\n")
-    except:
-        pass
+    # --- СОХРАНЯЕМ В SUPABASE ---
+    save_subscription(user_id, expires, "stars")
+    
+    # Обновляем глобальную переменную
+    global subscriptions
+    subscriptions[user_id] = expires
+    
+    save_user(user_id)
     
     try:
         invite_link = await context.bot.create_chat_invite_link(
@@ -279,6 +265,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="HTML"
         )
 
+
 # --- ПОКУПКА ЧЕРЕЗ CRYPTO PAY (СИНХРОННАЯ) ---
 async def crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -303,7 +290,6 @@ async def crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # Убираем await - библиотека синхронная!
         invoice = crypto.create_invoice(
             asset="USDT",
             amount=price,
@@ -313,7 +299,6 @@ async def crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             #paid_btn_url="https://t.me/твой_канал"
         )
         
-        # Проверяем, что инвойс создан
         if not invoice or 'invoice_id' not in invoice:
             raise Exception("Не удалось создать инвойс")
         
@@ -341,6 +326,7 @@ async def crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка создания инвойса Crypto Pay: {e}")
         await query.edit_message_text(f"❌ Ошибка создания счёта: {str(e)}")
 
+
 # --- ПРОВЕРКА ОПЛАТЫ CRYPTO PAY (СИНХРОННАЯ) ---
 async def crypto_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -351,21 +337,19 @@ async def crypto_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     days = context.user_data.get('crypto_days', 30)
     
     try:
-        # Убираем await - библиотека синхронная!
         invoice = crypto.get_invoices(invoice_id=invoice_id)
         
-        # Проверяем статус
         if invoice and invoice.get('status') == 'paid':
             expires = datetime.now() + timedelta(days=days)
-            subscriptions[user_id] = expires
-            save_subscriptions()
-            save_user(user_id)
             
-            try:
-                with open("subscriptions.txt", "a") as f:
-                    f.write(f"{user_id}|{expires.isoformat()}\n")
-            except:
-                pass
+            # --- СОХРАНЯЕМ В SUPABASE ---
+            save_subscription(user_id, expires, "crypto")
+            
+            # Обновляем глобальную переменную
+            global subscriptions
+            subscriptions[user_id] = expires
+            
+            save_user(user_id)
             
             try:
                 invite_link = await context.bot.create_chat_invite_link(
@@ -401,6 +385,7 @@ async def crypto_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка проверки инвойса: {e}")
         await query.edit_message_text(f"❌ Ошибка проверки: {str(e)}")
 
+
 # --- АДМИН ---
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -418,6 +403,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+
 # --- ПЕРЕСЫЛКА СООБЩЕНИЙ ---
 async def forward_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -431,6 +417,7 @@ async def forward_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
              f"📝 {text}",
         parse_mode="HTML"
     )
+
 
 # --- ОТВЕТ ПОЛЬЗОВАТЕЛЮ ---
 async def answer_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -457,6 +444,7 @@ async def answer_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
+
 # --- РАССЫЛКА ---
 async def send_to_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -470,12 +458,8 @@ async def send_to_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message_text = parts[1]
     
-    try:
-        with open(USERS_FILE, "r") as f:
-            users = [line.strip() for line in f if line.strip()]
-    except FileNotFoundError:
-        await update.message.reply_text("❌ Нет пользователей")
-        return
+    # --- ПОЛУЧАЕМ ПОЛЬЗОВАТЕЛЕЙ ИЗ SUPABASE ---
+    users = get_all_users()
     
     if not users:
         await update.message.reply_text("❌ Нет пользователей")
@@ -494,6 +478,7 @@ async def send_to_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
             success += 1
+            await asyncio.sleep(0.05)  # Небольшая задержка, чтобы не спамить
         except Exception:
             fail += 1
     
@@ -503,14 +488,14 @@ async def send_to_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"❌ Ошибок: {fail}"
     )
 
+
 # --- ЗАПУСК ---
 def main():
+    # Загружаем подписки из Supabase
     load_subscriptions()
     
-    # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin))
     application.add_handler(CommandHandler("answer", answer_user))
@@ -526,8 +511,11 @@ def main():
     
     logger.info("Бот запущен!")
     
-    # Запускаем бота
+    # Удаляем вебхук перед запуском
+    application.bot.delete_webhook(drop_pending_updates=True)
+    
     application.run_polling()
+
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from supabase import create_client, Client
-from typing import Optional, Dict, Any
+from typing import Dict, List, Optional
 
 # --- НАСТРОЙКА ПОДКЛЮЧЕНИЯ ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -23,11 +23,12 @@ def save_user(user_id: int) -> None:
         if not result.data:
             # Если нет — добавляем
             supabase.table("users").insert({"user_id": user_id}).execute()
+            print(f"✅ Пользователь {user_id} добавлен в базу")
     except Exception as e:
         print(f"⚠️ Ошибка сохранения пользователя {user_id}: {e}")
 
 
-def get_all_users() -> list:
+def get_all_users() -> List[int]:
     """Возвращает список всех пользователей (для рассылки)"""
     try:
         result = supabase.table("users").select("user_id").execute()
@@ -38,13 +39,16 @@ def get_all_users() -> list:
 
 
 # --- ФУНКЦИИ ДЛЯ РАБОТЫ С ПОДПИСКАМИ ---
-def load_subscriptions() -> Dict[int, datetime]:
+def load_subscriptions_from_db() -> Dict[int, datetime]:
     """Загружает все подписки из базы"""
     subscriptions = {}
     try:
         result = supabase.table("subscriptions").select("user_id, expires_at").execute()
         for item in result.data:
-            subscriptions[item['user_id']] = datetime.fromisoformat(item['expires_at'].replace('Z', '+00:00'))
+            # Преобразуем строку в datetime
+            expires_str = item['expires_at'].replace('Z', '+00:00')
+            subscriptions[item['user_id']] = datetime.fromisoformat(expires_str)
+        print(f"✅ Загружено {len(subscriptions)} подписок из базы")
     except Exception as e:
         print(f"⚠️ Ошибка загрузки подписок: {e}")
     return subscriptions
@@ -60,6 +64,7 @@ def save_subscription(user_id: int, expires_at: datetime, tariff: str = 'month')
             "tariff": tariff,
             "updated_at": datetime.now().isoformat()
         }).execute()
+        print(f"✅ Подписка для {user_id} сохранена до {expires_at}")
     except Exception as e:
         print(f"⚠️ Ошибка сохранения подписки для {user_id}: {e}")
 
@@ -68,6 +73,7 @@ def delete_subscription(user_id: int) -> None:
     """Удаляет подписку пользователя (если нужно)"""
     try:
         supabase.table("subscriptions").delete().eq("user_id", user_id).execute()
+        print(f"✅ Подписка для {user_id} удалена")
     except Exception as e:
         print(f"⚠️ Ошибка удаления подписки для {user_id}: {e}")
 

@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from supabase import create_client, Client
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 # --- НАСТРОЙКА ПОДКЛЮЧЕНИЯ ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")

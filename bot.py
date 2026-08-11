@@ -75,10 +75,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_subscribed(user_id):
         await update.message.reply_text(
             "✅ <b>У вас есть активная подписка!</b>\n\n"
-            "📡 Сигнальный канал — уже открыт\n"
-            "🔍 NFT-Tracker — поиск владельцев подарков\n\n"
-            "Доступные команды:\n"
-            "/search — поиск подарков (в NFT-Tracker)",
+            "📡 Gifts Intelligence — уже открыт\n"
+            "🔍 NFT-Tracker — поиск владельцев подарков\n\n",
             parse_mode="HTML"
         )
         return
@@ -86,12 +84,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "💎 <b>Подписка на NFT-сигналы</b>\n\n"
         "Что вы получаете:\n"
-        "📡 <b>Сигнальный канал</b> — арбитражные сигналы по NFT-подаркам (Portals)\n"
+        "📡 <b>Gifts Intelligence</b> — арбитражные сигналы по NFT-подаркам (Portals)\n"
         "🔍 <b>NFT-Tracker</b> — поиск владельцев подарков по модели, фону, номеру\n\n"
-        "⚠️ <b>Важно:</b>\n"
-        "• Информация не является финансовой рекомендацией\n"
-        "• Все решения о покупке/продаже вы принимаете самостоятельно\n"
-        "• Администрация не несёт ответственности за возможные убытки\n\n"
+        "⚠️ <b>Дисклеймер:</b> Не финансовый совет. Все решения — на ваш риск\n\n"
         "💰 <b>Стоимость:</b>\n"
         "1 месяц — 300 ⭐ / 5 USDT\n"
         "3 месяца — 600 ⭐ / 10 USDT\n"
@@ -107,20 +102,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
 
-# --- КНОПКА НАЗАД ---
+# --- КНОПКА НАЗАД (С УДАЛЕНИЕМ ИНВОЙСА) ---
 async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     user_id = query.from_user.id
     
+    # Удаляем сообщение с инвойсом, если оно было сохранено
+    invoice_message_id = context.user_data.get('invoice_message_id')
+    if invoice_message_id:
+        try:
+            await context.bot.delete_message(
+                chat_id=user_id,
+                message_id=invoice_message_id
+            )
+            context.user_data['invoice_message_id'] = None
+        except Exception as e:
+            logger.error(f"Не удалось удалить инвойс: {e}")
+    
     if is_subscribed(user_id):
         await query.edit_message_text(
             "✅ <b>У вас есть активная подписка!</b>\n\n"
-            "📡 Сигнальный канал — уже открыт\n"
-            "🔍 NFT-Tracker — поиск владельцев подарков\n\n"
-            "Доступные команды:\n"
-            "/search — поиск подарков",
+            "📡 Gifts Intelligence — уже открыт\n"
+            "🔍 NFT-Tracker — поиск владельцев подарков\n\n",
             parse_mode="HTML"
         )
         return
@@ -130,9 +135,7 @@ async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Что вы получаете:\n"
         "📡 <b>Сигнальный канал</b> — арбитражные сигналы по NFT-подаркам\n"
         "🔍 <b>NFT-Tracker</b> — поиск владельцев подарков\n\n"
-        "⚠️ <b>Важно:</b>\n"
-        "• Информация не является финансовой рекомендацией\n"
-        "• Все решения вы принимаете самостоятельно\n\n"
+        "⚠️ <b>Дисклеймер:</b> Не финансовый совет. Все решения — на ваш риск\n\n"
         "💰 <b>Стоимость:</b>\n"
         "1 месяц — 300 ⭐ / 5 USDT\n"
         "3 месяца — 600 ⭐ / 10 USDT\n"
@@ -182,7 +185,7 @@ async def choose_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-# --- ПОКУПКА ЧЕРЕЗ STARS ---
+# --- ПОКУПКА ЧЕРЕЗ STARS (С СОХРАНЕНИЕМ ID ИНВОЙСА) ---
 async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -206,7 +209,8 @@ async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        await context.bot.send_invoice(
+        # Отправляем инвойс и сохраняем его message_id
+        sent_message = await context.bot.send_invoice(
             chat_id=user_id,
             title=f"Подписка на сигналы — {label}",
             description="Доступ к сигнальному каналу + NFT-Tracker",
@@ -219,6 +223,10 @@ async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             need_phone_number=False,
             need_email=False
         )
+        
+        # Сохраняем ID сообщения с инвойсом для последующего удаления
+        context.user_data['invoice_message_id'] = sent_message.message_id
+        
     except Exception as e:
         logger.error(f"Ошибка создания счёта: {e}")
         await query.edit_message_text("❌ Ошибка создания счёта. Попробуйте позже.")
@@ -255,7 +263,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             f"✅ <b>Оплата прошла успешно!</b>\n\n"
             f"Подписка активна до {expires.strftime('%d.%m.%Y %H:%M')}\n\n"
-            f"📡 <b>Сигнальный канал:</b>\n"
+            f"📡 <b>Gifts Intelligence:</b>\n"
             f"{invite_link.invite_link}\n\n"
             f"🔍 <b>NFT-Tracker</b> — поиск владельцев подарков\n"
             f"👉 @fyvfhvfhyfbot\n\n"
@@ -271,7 +279,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="HTML"
         )
 
-# --- ПОКУПКА ЧЕРЕЗ CRYPTO PAY (ИСПРАВЛЕННАЯ) ---
+# --- ПОКУПКА ЧЕРЕЗ CRYPTO PAY (СИНХРОННАЯ) ---
 async def crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -295,15 +303,19 @@ async def crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        # Асинхронный вызов (исправлено)
-        invoice = await crypto.create_invoice(
+        # Убираем await - библиотека синхронная!
+        invoice = crypto.create_invoice(
             asset="USDT",
             amount=price,
             description=f"Подписка на NFT-сигналы — {label}",
             hidden_message=f"Спасибо за подписку! Ваш ID: {user_id}",
-            paid_btn_name="openChannel",
-            paid_btn_url="https://t.me/твой_канал"
+            #paid_btn_name="openChannel",
+            #paid_btn_url="https://t.me/твой_канал"
         )
+        
+        # Проверяем, что инвойс создан
+        if not invoice or 'invoice_id' not in invoice:
+            raise Exception("Не удалось создать инвойс")
         
         context.user_data['crypto_invoice_id'] = invoice['invoice_id']
         context.user_data['crypto_days'] = days
@@ -328,8 +340,8 @@ async def crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка создания инвойса Crypto Pay: {e}")
         await query.edit_message_text(f"❌ Ошибка создания счёта: {str(e)}")
-        
-# --- ПРОВЕРКА ОПЛАТЫ CRYPTO PAY (ИСПРАВЛЕННАЯ) ---
+
+# --- ПРОВЕРКА ОПЛАТЫ CRYPTO PAY (СИНХРОННАЯ) ---
 async def crypto_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -339,11 +351,11 @@ async def crypto_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     days = context.user_data.get('crypto_days', 30)
     
     try:
-        # Асинхронный вызов
-        invoices = await crypto.get_invoices(invoice_id=invoice_id)
+        # Убираем await - библиотека синхронная!
+        invoice = crypto.get_invoices(invoice_id=invoice_id)
         
-        # Проверка статуса (исправлено)
-        if invoices['status'] == 'paid':
+        # Проверяем статус
+        if invoice and invoice.get('status') == 'paid':
             expires = datetime.now() + timedelta(days=days)
             subscriptions[user_id] = expires
             save_subscriptions()
@@ -364,7 +376,7 @@ async def crypto_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(
                     f"✅ <b>Оплата прошла успешно!</b>\n\n"
                     f"Подписка активна до {expires.strftime('%d.%m.%Y %H:%M')}\n\n"
-                    f"📡 <b>Сигнальный канал:</b>\n"
+                    f"📡 <b>Gifts Intelligence:</b>\n"
                     f"{invite_link.invite_link}\n\n"
                     f"🔍 <b>NFT-Tracker</b>\n"
                     f"👉 @fyvfhvfhyfbot\n\n"

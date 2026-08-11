@@ -1,3 +1,5 @@
 python-telegram-bot==20.7
 python-dotenv==1.0.1
 pyCryptoPayAPI==1.0.0
+Flask==2.3.3
+Flask-Cors==4.0.0
